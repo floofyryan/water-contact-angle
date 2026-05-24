@@ -1,27 +1,30 @@
 # PyInstaller spec file — builds a single-file Windows .exe
 #
 # Run from INSIDE the water-contact-angle folder:
-#   pip install pyinstaller tkinterdnd2
+#   pip install pyinstaller windnd
 #   pyinstaller build_exe.spec
 
-import os
+import os, glob
 block_cipher = None
 
-# Include tkinterdnd2's native TkDND library so drag-and-drop works in the exe.
-try:
-    import tkinterdnd2
-    _dnd_src = os.path.join(os.path.dirname(tkinterdnd2.__file__), "tkdnd")
-    _dnd_data = [(_dnd_src, "tkdnd")] if os.path.isdir(_dnd_src) else []
-except Exception:
-    _dnd_data = []
+# Collect all sibling .py analysis modules so they are bundled as plain files
+# that can be found via absolute import (import analyzer, import detection, …)
+_here = os.path.dirname(os.path.abspath('app.py'))
+_sibling_modules = [
+    'analyzer', 'calibration', 'detection', 'preprocessing', 'visualization',
+    'fitting', 'evaporation', 'advancing_receding', 'live', 'surface_energy',
+    'baseline', 'publication', 'tuner', 'segmentation', 'reflection',
+]
+_extra_datas = [(os.path.join(_here, f"{m}.py"), ".") for m in _sibling_modules
+                if os.path.exists(os.path.join(_here, f"{m}.py"))]
 
 a = Analysis(
     ['app.py'],
-    pathex=['.'],          # run from inside water-contact-angle/
+    pathex=['.'],
     binaries=[],
-    datas=_dnd_data,
+    datas=_extra_datas,
     hiddenimports=[
-        # sibling analysis modules (lazy-imported — PyInstaller won't find them automatically)
+        # sibling analysis modules
         'analyzer',
         'calibration',
         'detection',
@@ -38,6 +41,7 @@ a = Analysis(
         'segmentation',
         'reflection',
         # third-party
+        'windnd',
         'cv2',
         'numpy',
         'scipy',
@@ -49,7 +53,6 @@ a = Analysis(
         'tkinter.ttk',
         'tkinter.filedialog',
         'tkinter.messagebox',
-        'tkinterdnd2',
     ],
     hookspath=[],
     hooksconfig={},

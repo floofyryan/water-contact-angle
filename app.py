@@ -54,11 +54,15 @@ _set_dpi_aware()
 
 
 # ── Frozen-exe sys.path fix ───────────────────────────────────────────────────
-# PyInstaller bundles sibling modules as top-level modules (absolute names).
-# Make sure the extraction directory is on sys.path so absolute imports work.
+# PyInstaller extracts everything into sys._MEIPASS.  The sibling analysis
+# modules (analyzer.py, detection.py, …) are collected there as a sub-package
+# folder called 'wca_modules'.  We add that folder to sys.path so that
+# absolute imports work regardless of how the exe was invoked.
 if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-    if sys._MEIPASS not in sys.path:
-        sys.path.insert(0, sys._MEIPASS)
+    _mei = sys._MEIPASS
+    for _candidate in (_mei, str(Path(_mei) / "wca_modules")):
+        if _candidate not in sys.path:
+            sys.path.insert(0, _candidate)
 
 
 # ── Portable sibling-module importer ─────────────────────────────────────────
@@ -72,7 +76,7 @@ def _pkg_import(module: str, *names):
       3. Plain script (python app.py)                         → absolute import
     """
     import importlib
-    pkg = __package__  # e.g. 'water-contact-angle' when run as package, else None
+    pkg = __package__
     if pkg:
         mod = importlib.import_module(f".{module}", package=pkg)
     else:
@@ -103,13 +107,12 @@ def _get_sea():
     return _pkg_import("surface_energy", "SurfaceEnergyAnalyzer", "LIQUIDS")
 
 
-# ── Optional drag-and-drop support (tkinterdnd2) ──────────────────────────────
+# ── Drag-and-drop (windnd — uses Windows OLE, no Tcl/Tk extension needed) ─────
 try:
-    from tkinterdnd2 import TkinterDnD as _TkDnD, DND_FILES as _DND_FILES
+    import windnd as _windnd
     _DND_OK = True
 except Exception:
-    _TkDnD = None
-    _DND_FILES = None
+    _windnd = None
     _DND_OK = False
 
 
@@ -218,10 +221,9 @@ class SingleImageWindow(_SafeWindow):
         self._path_lbl = tk.Label(frm, text=f"No file selected{hint}", fg="grey")
         self._path_lbl.pack(side="left", padx=8)
 
-        # Drag-and-drop: register the whole window as a drop target when available
+        # Drag-and-drop via windnd (Windows OLE — works in frozen exes)
         if _DND_OK:
-            self.drop_target_register(_DND_FILES)
-            self.dnd_bind("<<Drop>>", self._on_drop)
+            _windnd.hook_dropfiles(self, func=self._on_drop)
 
         btn_frm = tk.Frame(self)
         btn_frm.pack(pady=8)
@@ -235,14 +237,14 @@ class SingleImageWindow(_SafeWindow):
         self._result_lbl.pack(padx=10, pady=4)
         self._ca = None
 
-    def _on_drop(self, event) -> None:
-        """Handle a file dragged onto the window."""
-        # tkinterdnd2 wraps paths with spaces in {braces}
-        raw = event.data.strip()
-        path = raw.strip("{}").strip()
-        if path:
-            self._path = Path(path)
-            self._path_lbl.config(text=str(self._path), fg="black")
+    def _on_drop(self, files) -> None:
+        """Handle a file dragged onto the window (windnd callback)."""
+        if not files:
+            return
+        f = files[0]
+        path = f.decode("utf-8") if isinstance(f, bytes) else str(f)
+        self._path = Path(path)
+        self._path_lbl.config(text=str(self._path), fg="black")
 
     def _browse(self):
         p = filedialog.askopenfilename(
@@ -804,7 +806,7 @@ class SurfaceEnergyWindow(_SafeWindow):
 
 # ── Main launcher ─────────────────────────────────────────────────────────────
 
-class LauncherApp(_TkDnD.Tk if _DND_OK else tk.Tk):
+class LauncherApp(tk.Tk):
     """Main launcher window."""
 
     def __init__(self):
