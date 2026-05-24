@@ -62,21 +62,17 @@ if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
 # ── Portable sibling-module importer ─────────────────────────────────────────
 def _pkg_import(module: str, *names):
     """
-    Import names from a sibling analysis module. Three contexts:
+    Import names from a wca analysis module. Works in all three contexts:
       1. Package (python -m water-contact-angle)  → relative import via __package__
-      2. Frozen exe (PyInstaller)                 → import as 'wca.module'
-         runtime_hook_wca.py pre-creates the 'wca' virtual package so that
-         relative imports inside the sibling modules keep working.
-      3. Plain script (python app.py)             → absolute import
+      2. Frozen exe (PyInstaller)                 → wca is a real bundled package
+      3. Plain script (python app.py)             → wca/ subdir is importable
     """
     import importlib
     pkg = __package__
     if pkg:
         mod = importlib.import_module(f".{module}", package=pkg)
-    elif getattr(sys, "frozen", False):
-        mod = importlib.import_module(f"wca.{module}")
     else:
-        mod = importlib.import_module(module)
+        mod = importlib.import_module(f"wca.{module}")
     if len(names) == 1:
         return getattr(mod, names[0])
     return tuple(getattr(mod, n) for n in names)
