@@ -111,7 +111,7 @@ def draw_overlay(
         # R² quality badge
         if show_r2 and r2 is not None:
             badge_col = _COL_TEXT_GOOD if r2 > 0.90 else _COL_TEXT_BAD
-            bx = xi - 30 if side == "right" else xi + 6
+            bx = xi + 6 if side == "right" else xi - 62
             cv2.putText(overlay, f"R²={r2:.2f}", (bx, yi - arc_radius_px - 8),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.38, badge_col, 1, cv2.LINE_AA)
 
@@ -170,7 +170,9 @@ def _draw_angle_arc(
 
     h, w = img.shape[:2]
     pts = np.column_stack([xs, ys])
-    valid = (pts[:, 0] >= 0) & (pts[:, 0] < w) & (pts[:, 1] >= 0) & (pts[:, 1] < h)
+    # Keep only points inside the image and strictly above the baseline (yi)
+    # to prevent the arc from sweeping below the substrate for obtuse angles.
+    valid = (pts[:, 0] >= 0) & (pts[:, 0] < w) & (pts[:, 1] >= 0) & (pts[:, 1] <= yi)
     pts = pts[valid]
 
     for i in range(len(pts) - 1):

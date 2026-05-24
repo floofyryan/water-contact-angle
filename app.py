@@ -107,7 +107,11 @@ class ParamPanel(tk.LabelFrame):
         for key, (var, typ) in self._vars.items():
             raw = var.get().strip()
             if typ == "int":
-                out[key] = int(raw) if raw else 0
+                v = int(raw) if raw else 0
+                # blur_ksize must be odd for GaussianBlur; correct silently
+                if key == "blur_ksize" and v > 0 and v % 2 == 0:
+                    v += 1
+                out[key] = v
             elif typ == "float":
                 out[key] = float(raw) if raw else 0.0
             elif typ == "int_opt":
@@ -185,7 +189,13 @@ class SingleImageWindow(tk.Toplevel):
             if r.get("r2_right")    is not None: lines.append(f"R²_R:  {r['r2_right']:.4f}")
             lines.append(f"Baseline y: {r.get('baseline_y')}")
             self._result_lbl.config(text="\n".join(lines))
-            self._ca.show("Analysis result  (press any key to close)")
+            # Bug 6 fix: cv2.waitKey(0) would block tkinter's main thread.
+            # Run the OpenCV display window in a daemon thread instead.
+            ca_ref = self._ca
+            threading.Thread(
+                target=lambda: ca_ref.show("Analysis result  (press any key to close)"),
+                daemon=True,
+            ).start()
         except Exception as exc:
             messagebox.showerror("Error", str(exc))
 
@@ -276,9 +286,12 @@ class BatchWindow(tk.Toplevel):
                     r = {"error": str(exc)}
                 r["filename"] = img_path.name
                 rows.append(r)
-                self._progress["value"] = i + 1
-                self._status.config(text=f"{i+1}/{len(paths)}: {img_path.name}")
-                self.update_idletasks()
+                # Bug 1 fix: marshal tkinter updates back to the main thread.
+                _i, _name = i, img_path.name
+                self.after(0, lambda v=_i+1, n=_name: (
+                    self._progress.__setitem__("value", v),
+                    self._status.config(text=f"{v}/{len(paths)}: {n}"),
+                ))
 
             fields = ["filename", "theta_left", "theta_right", "theta_mean",
                       "asymmetry", "r2_left", "r2_right", "baseline_y", "error"]
@@ -286,9 +299,12 @@ class BatchWindow(tk.Toplevel):
                 writer = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
                 writer.writeheader()
                 writer.writerows(rows)
-            self._status.config(text=f"Done — {len(rows)} images → {out_path}")
-            messagebox.showinfo("Batch complete",
-                                f"Processed {len(rows)} images.\nResults saved to:\n{out_path}")
+            msg = f"Done — {len(rows)} images → {out_path}"
+            self.after(0, lambda: self._status.config(text=msg))
+            self.after(0, lambda: messagebox.showinfo(
+                "Batch complete",
+                f"Processed {len(rows)} images.\nResults saved to:\n{out_path}"
+            ))
 
         threading.Thread(target=_worker, daemon=True).start()
 
@@ -349,6 +365,7 @@ class EvaporationWindow(tk.Toplevel):
         ppmm = float(ex["pixels_per_mm"]) if ex["pixels_per_mm"] else 0
 
         def _worker():
+            # Bug 2 fix: all tkinter widget mutations use self.after() from this thread.
             try:
                 from .evaporation import EvaporationAnalyzer
                 cal = None
@@ -368,19 +385,22 @@ class EvaporationWindow(tk.Toplevel):
                     window_px=p["window_px"],
                     baseline_margin=p["baseline_margin"],
                 )
-                self._status.config(text="Analysing…")
+                self.after(0, lambda: self._status.config(text="Analysing…"))
                 ea.analyze_video(self._video)
-                self._status.config(text="Analysis complete — saving outputs…")
+                self.after(0, lambda: self._status.config(
+                    text="Analysis complete — saving outputs…"))
 
                 stem = self._video.stem
                 out_dir = self._video.parent
                 ea.export_csv(out_dir / f"{stem}_results.csv")
                 print(ea.regime_summary())
                 ea.plot_time_series(save_path=str(out_dir / f"{stem}_plot.png"))
-                self._status.config(text=f"Done. Files saved to {out_dir}")
+                _msg = f"Done. Files saved to {out_dir}"
+                self.after(0, lambda m=_msg: self._status.config(text=m))
             except Exception as exc:
-                self._status.config(text=f"Error: {exc}")
-                messagebox.showerror("Error", str(exc))
+                _e = str(exc)
+                self.after(0, lambda e=_e: self._status.config(text=f"Error: {e}"))
+                self.after(0, lambda e=_e: messagebox.showerror("Error", e))
 
         threading.Thread(target=_worker, daemon=True).start()
 
@@ -438,6 +458,7 @@ class AdvRecWindow(tk.Toplevel):
         ex = {k: v.get().strip() for k, v in self._extra_vars.items()}
 
         def _worker():
+            # Bug 3 fix: all tkinter widget mutations use self.after() from this thread.
             try:
                 from .advancing_receding import AdvancingRecedingAnalyzer
                 ar = AdvancingRecedingAnalyzer(
@@ -454,13 +475,15 @@ class AdvRecWindow(tk.Toplevel):
                     baseline_margin=p["baseline_margin"],
                 )
                 ar.analyze_video(self._video)
-                self._result_lbl.config(text=ar.summary())
+                _summary = ar.summary()
+                self.after(0, lambda s=_summary: self._result_lbl.config(text=s))
                 out_dir = self._video.parent
                 stem    = self._video.stem
                 ar.export_csv(out_dir / f"{stem}_advrec.csv")
                 ar.plot(save_path=str(out_dir / f"{stem}_advrec_plot.png"))
             except Exception as exc:
-                messagebox.showerror("Error", str(exc))
+                _e = str(exc)
+                self.after(0, lambda e=_e: messagebox.showerror("Error", e))
 
         threading.Thread(target=_worker, daemon=True).start()
 
@@ -501,6 +524,8 @@ class LiveWindow(tk.Toplevel):
         cam = self._cam_var.get().strip()
 
         def _worker():
+            # Bug 4 fix: messagebox must be called on the main thread.
+            # la.run() itself (OpenCV HighGUI) is fine on a background thread on Linux/Win.
             try:
                 from .live import LiveAnalyzer
                 la = LiveAnalyzer(
@@ -516,7 +541,8 @@ class LiveWindow(tk.Toplevel):
                 )
                 la.run()
             except Exception as exc:
-                messagebox.showerror("Error", str(exc))
+                _e = str(exc)
+                self.after(0, lambda e=_e: messagebox.showerror("Error", e))
 
         threading.Thread(target=_worker, daemon=True).start()
 
@@ -561,12 +587,15 @@ class TunerWindow(tk.Toplevel):
             return
 
         def _worker():
+            # Bug 5 fix: messagebox must be called on the main thread.
+            # t.show() (matplotlib GUI) is acceptable on a background thread on Linux/Win.
             try:
                 from .tuner import ThresholdTuner
                 t = ThresholdTuner(self._path, mode=self._mode_var.get())
                 t.show()
             except Exception as exc:
-                messagebox.showerror("Error", str(exc))
+                _e = str(exc)
+                self.after(0, lambda e=_e: messagebox.showerror("Error", e))
 
         threading.Thread(target=_worker, daemon=True).start()
 

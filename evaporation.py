@@ -380,9 +380,9 @@ class EvaporationAnalyzer:
                 drop_height_px = float(abs(bl_y - ys_edge.min()))
 
         # Quality check: both R² should be > 0.85
-        r2l = result.get('r2_left')  or 0
-        r2r = result.get('r2_right') or 0
-        quality_ok = r2l > 0.85 and r2r > 0.85
+        r2l_raw = result.get('r2_left')
+        r2r_raw = result.get('r2_right')
+        quality_ok = (r2l_raw or 0) > 0.85 and (r2r_raw or 0) > 0.85
 
         row = {
             'frame':          frame_idx,
@@ -392,8 +392,8 @@ class EvaporationAnalyzer:
             'theta_mean':     result.get('theta_mean'),
             'x_left':         xl,
             'x_right':        xr,
-            'r2_left':        r2l,
-            'r2_right':       r2r,
+            'r2_left':        r2l_raw,
+            'r2_right':       r2r_raw,
             'base_radius_px': base_radius_px,
             'drop_height_px': drop_height_px,
             'base_radius_mm': None,
@@ -428,8 +428,10 @@ class EvaporationAnalyzer:
         theta_sm  = _moving_avg(theta_s,  smooth_window)
         radius_sm = _moving_avg(radius_s, smooth_window)
 
-        regimes = detect_regime(theta_sm, radius_sm,
-                                window=smooth_window * 2)
+        # Pass the raw series to detect_regime so its internal variance thresholds
+        # are calibrated against unsmoothed data (avoids suppressed std misclassifying
+        # active evaporation frames as 'stable').
+        regimes = detect_regime(theta_s, radius_s, window=smooth_window)
         for row, reg in zip(self._raw, regimes):
             row['regime'] = reg
 
@@ -666,5 +668,8 @@ class EvaporationAnalyzer:
             fig.savefig(save_path, dpi=150, bbox_inches='tight',
                         facecolor='#1a1a1a')
             print(f"Saved: {save_path}")
-        plt.show()
+        try:
+            plt.show()
+        except Exception:
+            pass
         return fig

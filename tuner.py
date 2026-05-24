@@ -257,7 +257,10 @@ class ThresholdTuner:
     def _on_reset(self, _event) -> None:
         for _, key, _, _, init, _ in self._SLIDER_DEFS:
             self._p[key] = init
+            # Suppress per-slider callbacks to avoid N redundant redraws.
+            self._sliders[key].eventson = False
             self._sliders[key].set_val(init)
+            self._sliders[key].eventson = True
         self._redraw()
 
     def _on_print(self, _event) -> None:

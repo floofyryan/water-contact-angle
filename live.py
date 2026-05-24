@@ -187,7 +187,7 @@ class LiveAnalyzer:
 
     def _analyse_frame(self, frame: np.ndarray) -> np.ndarray:
         """Run pipeline on one frame; return annotated BGR overlay."""
-        self._last_analyzed_frame = frame   # keep in sync with overlay for saving
+        self._last_analyzed_frame = frame.copy()   # copy — cap.read() may reuse buffer
         try:
             result = self._analyzer.analyze(
                 frame,
@@ -285,7 +285,7 @@ class LiveAnalyzer:
                 parts.append(f"R:{th_r:.1f}")
             if th_m is not None:
                 parts.append(f"mean:{th_m:.1f}")
-            text = "  ".join(parts) + "°"
+            text = "  ".join(parts) + "°" if parts else "No result"
         else:
             text = "No result"
 

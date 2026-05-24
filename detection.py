@@ -69,8 +69,10 @@ def detect_baseline_auto(
             return int(np.median(y_vals))
 
     # Gradient-based fallback
-    grad   = np.abs(np.diff(gray[y_start:].astype(np.float32), axis=0))
-    peak   = int(np.argmax(grad.mean(axis=1)))
+    grad = np.abs(np.diff(gray[y_start:].astype(np.float32), axis=0))
+    if grad.shape[0] == 0:
+        return y_start
+    peak = int(np.argmax(grad.mean(axis=1)))
     return y_start + peak + 1   # +1: diff boundary is between rows peak and peak+1
 
 

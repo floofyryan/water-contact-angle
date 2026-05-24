@@ -335,8 +335,9 @@ class AdvancingRecedingAnalyzer:
             ax0.axhline(rec, color=self._REGIME_COLORS["receding"],
                         lw=1.5, ls="--", label=f"θ_rec = {rec:.1f}°")
         ax0.set_ylabel("Contact angle (°)", color="#ccc", fontsize=10)
-        ax0.legend(fontsize=9, facecolor="#333", labelcolor="white",
-                   loc="upper right")
+        # Store the angle legend before the regime legend overwrites it.
+        leg_angles = ax0.legend(fontsize=9, facecolor="#333", labelcolor="white",
+                                loc="upper right")
 
         # Panel 2 — base radius
         ax1 = axes[1]
@@ -351,12 +352,13 @@ class AdvancingRecedingAnalyzer:
             ax.grid(True, alpha=0.15, color="#555")
             ax.tick_params(colors="#aaa", labelsize=9)
 
-        # Regime legend
+        # Regime legend on ax1; restore the angle legend on ax0.
         patches = [mpatches.Patch(color=col, alpha=0.6, label=reg)
                    for reg, col in self._REGIME_COLORS.items() if reg]
-        axes[0].add_artist(axes[0].get_legend())
         axes[1].legend(handles=patches, fontsize=8, facecolor="#333",
                        labelcolor="white", title="Regime", title_fontsize=8)
+        if leg_angles is not None:
+            axes[0].add_artist(leg_angles)
 
         fig.suptitle("Advancing / Receding Contact Angle", color="white",
                      fontsize=13, y=0.98)
