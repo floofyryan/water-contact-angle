@@ -740,15 +740,17 @@ def main():
 
 
 if __name__ == "__main__":
-    # Allow running as: python app.py (not just as a package)
-    # Add the parent directory to sys.path so relative imports work.
-    _here = Path(__file__).resolve().parent
-    _parent = _here.parent
-    if str(_parent) not in sys.path:
-        sys.path.insert(0, str(_parent))
+    if getattr(sys, "frozen", False):
+        # Running inside a PyInstaller bundle — imports are already resolved.
+        main()
+    else:
+        # Running as a plain script — add parent to sys.path so relative imports work.
+        _here = Path(__file__).resolve().parent
+        _parent = _here.parent
+        if str(_parent) not in sys.path:
+            sys.path.insert(0, str(_parent))
 
-    # Re-import using absolute package name so relative imports inside work
-    _pkg = _here.name
-    import importlib
-    mod = importlib.import_module(f"{_pkg}.app")
-    mod.main()
+        _pkg = _here.name
+        import importlib
+        mod = importlib.import_module(f"{_pkg}.app")
+        mod.main()
