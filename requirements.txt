@@ -11,3 +11,6 @@ scipy>=1.10          # optional — not currently used directly, but good to hav
 # GUI (tkinter is bundled with Python — no pip install needed)
 # Pillow is required by some matplotlib backends on Windows
 Pillow>=9.0
+
+# Drag-and-drop support (optional — app works without it if not installed)
+tkinterdnd2>=0.3.0

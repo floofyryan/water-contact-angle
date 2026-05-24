@@ -53,31 +53,64 @@ def _set_dpi_aware() -> None:
 _set_dpi_aware()
 
 
+# ── Frozen-exe sys.path fix ───────────────────────────────────────────────────
+# PyInstaller bundles sibling modules as top-level modules (absolute names).
+# Make sure the extraction directory is on sys.path so absolute imports work.
+if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+    if sys._MEIPASS not in sys.path:
+        sys.path.insert(0, sys._MEIPASS)
+
+
+# ── Portable sibling-module importer ─────────────────────────────────────────
+def _pkg_import(module: str, *names):
+    """
+    Import names from a sibling module.
+
+    Works in three contexts:
+      1. Running as a package  (python -m water-contact-angle) → relative import
+      2. Frozen exe (PyInstaller)                              → absolute import
+      3. Plain script (python app.py)                         → absolute import
+    """
+    import importlib
+    pkg = __package__  # e.g. 'water-contact-angle' when run as package, else None
+    if pkg:
+        mod = importlib.import_module(f".{module}", package=pkg)
+    else:
+        mod = importlib.import_module(module)
+    if len(names) == 1:
+        return getattr(mod, names[0])
+    return tuple(getattr(mod, n) for n in names)
+
+
 # ── Lazy imports of heavy modules (keeps startup fast) ────────────────────────
 
 def _get_analyzer():
-    from .analyzer import ContactAngleAnalyzer
-    return ContactAngleAnalyzer
+    return _pkg_import("analyzer", "ContactAngleAnalyzer")
 
 def _get_evaporation():
-    from .evaporation import EvaporationAnalyzer
-    return EvaporationAnalyzer
+    return _pkg_import("evaporation", "EvaporationAnalyzer")
 
 def _get_ar():
-    from .advancing_receding import AdvancingRecedingAnalyzer
-    return AdvancingRecedingAnalyzer
+    return _pkg_import("advancing_receding", "AdvancingRecedingAnalyzer")
 
 def _get_live():
-    from .live import LiveAnalyzer
-    return LiveAnalyzer
+    return _pkg_import("live", "LiveAnalyzer")
 
 def _get_tuner():
-    from .tuner import ThresholdTuner
-    return ThresholdTuner
+    return _pkg_import("tuner", "ThresholdTuner")
 
 def _get_sea():
-    from .surface_energy import SurfaceEnergyAnalyzer, LIQUIDS
-    return SurfaceEnergyAnalyzer, LIQUIDS
+    return _pkg_import("surface_energy", "SurfaceEnergyAnalyzer", "LIQUIDS")
+
+
+# ── Optional drag-and-drop support (tkinterdnd2) ──────────────────────────────
+try:
+    from tkinterdnd2 import TkinterDnD as _TkDnD, DND_FILES as _DND_FILES
+    _DND_OK = True
+except Exception:
+    _TkDnD = None
+    _DND_FILES = None
+    _DND_OK = False
 
 
 # ── Shared parameter panel ────────────────────────────────────────────────────
@@ -181,8 +214,14 @@ class SingleImageWindow(_SafeWindow):
         frm = tk.Frame(self)
         frm.pack(fill="x", padx=10, pady=5)
         tk.Button(frm, text="Browse image…", command=self._browse).pack(side="left")
-        self._path_lbl = tk.Label(frm, text="No file selected", fg="grey")
+        hint = "  ← or drag & drop an image here" if _DND_OK else ""
+        self._path_lbl = tk.Label(frm, text=f"No file selected{hint}", fg="grey")
         self._path_lbl.pack(side="left", padx=8)
+
+        # Drag-and-drop: register the whole window as a drop target when available
+        if _DND_OK:
+            self.drop_target_register(_DND_FILES)
+            self.dnd_bind("<<Drop>>", self._on_drop)
 
         btn_frm = tk.Frame(self)
         btn_frm.pack(pady=8)
@@ -195,6 +234,15 @@ class SingleImageWindow(_SafeWindow):
                                     justify="left")
         self._result_lbl.pack(padx=10, pady=4)
         self._ca = None
+
+    def _on_drop(self, event) -> None:
+        """Handle a file dragged onto the window."""
+        # tkinterdnd2 wraps paths with spaces in {braces}
+        raw = event.data.strip()
+        path = raw.strip("{}").strip()
+        if path:
+            self._path = Path(path)
+            self._path_lbl.config(text=str(self._path), fg="black")
 
     def _browse(self):
         p = filedialog.askopenfilename(
@@ -314,7 +362,7 @@ class BatchWindow(_SafeWindow):
         self._progress["value"]   = 0
 
         def _worker():
-            from .analyzer import ContactAngleAnalyzer
+            ContactAngleAnalyzer = _pkg_import("analyzer", "ContactAngleAnalyzer")
             ca = ContactAngleAnalyzer(
                 mode=p["mode"],
                 canny_low=p["canny_low"],
@@ -416,10 +464,10 @@ class EvaporationWindow(_SafeWindow):
         def _worker():
             # Bug 2 fix: all tkinter widget mutations use self.after() from this thread.
             try:
-                from .evaporation import EvaporationAnalyzer
+                EvaporationAnalyzer = _pkg_import("evaporation", "EvaporationAnalyzer")
                 cal = None
                 if ppmm > 0:
-                    from .calibration import ScaleCalibration
+                    ScaleCalibration = _pkg_import("calibration", "ScaleCalibration")
                     cal = ScaleCalibration(ppmm)
                 ea = EvaporationAnalyzer(
                     mode=p["mode"],
@@ -512,7 +560,7 @@ class AdvRecWindow(_SafeWindow):
         def _worker():
             # Bug 3 fix: all tkinter widget mutations use self.after() from this thread.
             try:
-                from .advancing_receding import AdvancingRecedingAnalyzer
+                AdvancingRecedingAnalyzer = _pkg_import("advancing_receding", "AdvancingRecedingAnalyzer")
                 ar = AdvancingRecedingAnalyzer(
                     mode=p["mode"],
                     baseline_y=p["baseline_y"],
@@ -555,7 +603,7 @@ class LiveWindow(_SafeWindow):
         self._params = ParamPanel(self, padding=6)
         self._params.pack(fill="x", padx=10, pady=5)
 
-        frm = tk.LabelFrame(self, text="Camera", padding=6)
+        frm = ttk.LabelFrame(self, text="Camera", padding=6)
         frm.pack(fill="x", padx=10, pady=5)
         tk.Label(frm, text="Camera / video path:").grid(row=0, column=0, sticky="e")
         self._cam_var = tk.StringVar(value="0")
@@ -582,7 +630,7 @@ class LiveWindow(_SafeWindow):
             # Bug 4 fix: messagebox must be called on the main thread.
             # la.run() itself (OpenCV HighGUI) is fine on a background thread on Linux/Win.
             try:
-                from .live import LiveAnalyzer
+                LiveAnalyzer = _pkg_import("live", "LiveAnalyzer")
                 la = LiveAnalyzer(
                     mode=p["mode"],
                     camera=cam,
@@ -648,7 +696,7 @@ class TunerWindow(_SafeWindow):
             # Bug 5 fix: messagebox must be called on the main thread.
             # t.show() (matplotlib GUI) is acceptable on a background thread on Linux/Win.
             try:
-                from .tuner import ThresholdTuner
+                ThresholdTuner = _pkg_import("tuner", "ThresholdTuner")
                 t = ThresholdTuner(self._path, mode=self._mode_var.get())
                 t.show()
             except Exception as exc:
@@ -756,7 +804,7 @@ class SurfaceEnergyWindow(_SafeWindow):
 
 # ── Main launcher ─────────────────────────────────────────────────────────────
 
-class LauncherApp(tk.Tk):
+class LauncherApp(_TkDnD.Tk if _DND_OK else tk.Tk):
     """Main launcher window."""
 
     def __init__(self):
