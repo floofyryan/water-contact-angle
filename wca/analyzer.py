@@ -174,6 +174,18 @@ class ContactAngleAnalyzer:
             window_px=self.window_px,
         )
 
+        # ── Captive bubble angle correction ───────────────────────────────────
+        # The PCA method measures the angle through the GAS phase in the
+        # flipped image (same geometry as sessile drop).  For captive bubble the
+        # convention is to report the angle through the LIQUID (water) phase,
+        # which equals 180° − θ_PCA.
+        if self.mode == "captive_bubble":
+            for key in ("theta_left", "theta_right", "theta_mean"):
+                if result.get(key) is not None:
+                    result[key] = 180.0 - result[key]
+            if result.get("theta_left") is not None and result.get("theta_right") is not None:
+                result["asymmetry"] = abs(result["theta_left"] - result["theta_right"])
+
         # ── Optional circle fit ───────────────────────────────────────────────
         if self.use_circle_fit:
             try:
@@ -200,6 +212,22 @@ class ContactAngleAnalyzer:
         """
         if self._oriented is None:
             raise RuntimeError("Call analyze() before get_overlay().")
+
+        if self.mode == "captive_bubble":
+            # Show the image in its ORIGINAL (un-flipped) orientation so the
+            # substrate appears at the top as the user expects.  The edges are
+            # flipped back, and baseline_y is remapped to original coordinates.
+            h = self._raw.shape[0]
+            bl_orig = h - 1 - (self._baseline_y or 0)
+            return viz.draw_overlay(
+                self._raw,
+                np.flipud(self._edges),
+                self._result,
+                bl_orig,
+                captive_bubble=True,
+                **kwargs,
+            )
+
         return viz.draw_overlay(
             self._oriented,
             self._edges,

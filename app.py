@@ -125,7 +125,15 @@ def _setup_drop(widget, callback):
         user32.DefWindowProcW.restype     = LONG_PTR
 
         widget.update_idletasks()          # ensure HWND exists
-        hwnd = widget.winfo_id()
+
+        # wm_frame() returns the actual Win32 top-level HWND (as a hex string)
+        # for Toplevel windows. Explorer sends WM_DROPFILES to the top-level
+        # HWND, NOT to the inner client window returned by winfo_id(), so we
+        # must register and subclass the frame window.
+        try:
+            hwnd = int(widget.wm_frame(), 16)
+        except Exception:
+            hwnd = widget.winfo_id()
         if not hwnd:
             return
         shell32.DragAcceptFiles(hwnd, True)
@@ -245,6 +253,97 @@ class _SafeWindow(tk.Toplevel):
             ).pack(padx=10, pady=10)
 
 
+# ── Baseline picker ───────────────────────────────────────────────────────────
+
+class BaselinePickerWindow(tk.Toplevel):
+    """
+    Shows an image on a canvas and lets the user click to draw a horizontal
+    baseline.  Calls callback(y_pixels) when the user confirms.
+    """
+
+    def __init__(self, parent, image_path: Path, callback):
+        super().__init__(parent)
+        self.title("Pick baseline — click on the substrate line")
+        self._callback    = callback
+        self._baseline_y  = None   # in original image pixels
+        self._scale       = 1.0
+        self._line_id     = None
+        self._build(image_path)
+        self.lift()
+        self.focus_force()
+
+    def _build(self, image_path: Path):
+        tk.Label(
+            self,
+            text="Click anywhere on the substrate/solid surface to set the baseline.\n"
+                 "A red line marks your selection.  Click again to adjust.",
+            font=("", 9), justify="left",
+        ).pack(padx=10, pady=(8, 2))
+
+        # Load image ──────────────────────────────────────────────────────────
+        img_bgr = cv2.imread(str(image_path))
+        if img_bgr is None:
+            tk.Label(self, text="Could not load image.", fg="red").pack(pady=10)
+            return
+
+        from PIL import Image as _PILImage, ImageTk as _ImageTk
+        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+        orig_h, orig_w = img_rgb.shape[:2]
+
+        # Scale to fit inside 840 × 560 ───────────────────────────────────────
+        max_w, max_h = 840, 560
+        self._scale = min(1.0, max_w / orig_w, max_h / orig_h)
+        dw = max(1, int(orig_w * self._scale))
+        dh = max(1, int(orig_h * self._scale))
+        self._orig_h = orig_h
+
+        pil_img = _PILImage.fromarray(img_rgb).resize((dw, dh), _PILImage.LANCZOS)
+        self._photo = _ImageTk.PhotoImage(pil_img)
+
+        # Canvas ──────────────────────────────────────────────────────────────
+        self._canvas = tk.Canvas(self, width=dw, height=dh,
+                                 cursor="crosshair", bg="black")
+        self._canvas.pack(padx=10, pady=4)
+        self._canvas.create_image(0, 0, anchor="nw", image=self._photo)
+        self._canvas.bind("<Button-1>", self._on_click)
+
+        # Controls ─────────────────────────────────────────────────────────────
+        btn_frm = tk.Frame(self)
+        btn_frm.pack(pady=8)
+        self._info_lbl = tk.Label(
+            btn_frm,
+            text="Click the image to mark the substrate line",
+            fg="grey", width=46, anchor="w",
+        )
+        self._info_lbl.pack(side="left", padx=6)
+        tk.Button(btn_frm, text="Set baseline", width=14,
+                  command=self._confirm).pack(side="left", padx=4)
+        tk.Button(btn_frm, text="Cancel", width=8,
+                  command=self.destroy).pack(side="left", padx=2)
+
+    def _on_click(self, event):
+        y_canvas = event.y
+        self._baseline_y = int(round(y_canvas / self._scale))
+        dw = self._canvas.winfo_width()
+        if self._line_id:
+            self._canvas.delete(self._line_id)
+        self._line_id = self._canvas.create_line(
+            0, y_canvas, dw, y_canvas,
+            fill="#ff3333", width=2, dash=(8, 4),
+        )
+        self._info_lbl.config(
+            text=f"Baseline at y = {self._baseline_y} px — click 'Set baseline' to confirm",
+            fg="black",
+        )
+
+    def _confirm(self):
+        if self._baseline_y is None:
+            messagebox.showwarning("No baseline", "Click on the image first.", parent=self)
+            return
+        self._callback(self._baseline_y)
+        self.destroy()
+
+
 # ── Single image window ───────────────────────────────────────────────────────
 
 class SingleImageWindow(_SafeWindow):
@@ -275,6 +374,8 @@ class SingleImageWindow(_SafeWindow):
         btn_frm.pack(pady=8)
         tk.Button(btn_frm, text="Analyse", width=14,
                   command=self._run).pack(side="left", padx=4)
+        tk.Button(btn_frm, text="Pick baseline…", width=14,
+                  command=self._pick_baseline).pack(side="left", padx=4)
         tk.Button(btn_frm, text="Save overlay…", width=14,
                   command=self._save).pack(side="left", padx=4)
 
@@ -282,6 +383,15 @@ class SingleImageWindow(_SafeWindow):
                                     justify="left")
         self._result_lbl.pack(padx=10, pady=4)
         self._ca = None
+
+    def _pick_baseline(self):
+        if self._path is None:
+            messagebox.showwarning("No image", "Please select an image first.", parent=self)
+            return
+        def _set_bl(y):
+            var, _ = self._params._vars["baseline_y"]
+            var.set(str(y))
+        BaselinePickerWindow(self, self._path, _set_bl)
 
     def _on_drop(self, files) -> None:
         """Handle files dropped onto the window."""
@@ -370,6 +480,14 @@ class BatchWindow(_SafeWindow):
         tk.Button(frm, text="Select folder…", command=self._browse_folder).pack(side="left")
         self._folder_lbl = tk.Label(frm, text="No folder selected", fg="grey")
         self._folder_lbl.pack(side="left", padx=8)
+
+        hint = tk.Label(
+            self,
+            text="Tip: open one sample image with 'Pick baseline…' to find the right y value,\n"
+                 "then enter it in the Baseline y field above before running the batch.",
+            fg="grey", font=("", 8), justify="left",
+        )
+        hint.pack(padx=10, anchor="w")
 
         tk.Button(self, text="Run batch & export CSV", width=26,
                   command=self._run_batch).pack(pady=8)

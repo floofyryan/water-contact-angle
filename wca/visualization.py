@@ -42,6 +42,7 @@ def draw_overlay(
     tangent_length_px: int = 55,
     arc_radius_px: int = 35,
     show_r2: bool = True,
+    captive_bubble: bool = False,
 ) -> np.ndarray:
     """
     Draw a full analysis overlay on top of the image.
@@ -54,6 +55,9 @@ def draw_overlay(
         tangent_length_px : Half-length of each tangent line (pixels).
         arc_radius_px     : Radius of the angle arc annotation (pixels).
         show_r2           : Whether to display R² values in the text overlay.
+        captive_bubble    : If True the bubble is BELOW the baseline (original
+                            image orientation).  Arcs and tangents are mirrored
+                            vertically compared to sessile drop.
 
     Returns:
         BGR image with annotations.
@@ -96,9 +100,12 @@ def draw_overlay(
         # Contact point dot
         cv2.circle(overlay, (xi, yi), 5, col, -1, cv2.LINE_AA)
 
-        # Tangent line
+        # Tangent line — for captive bubble the direction y-component is negated
+        # because we're drawing on the original (un-flipped) image.
         if direc is not None:
             dx_t, dy_t = direc
+            if captive_bubble:
+                dy_t = -dy_t
             x0 = int(xi - dx_t * tangent_length_px)
             y0 = int(yi - dy_t * tangent_length_px)
             x1 = int(xi + dx_t * tangent_length_px)
@@ -106,17 +113,19 @@ def draw_overlay(
             cv2.line(overlay, (x0, y0), (x1, y1), _COL_TANGENT, 1, cv2.LINE_AA)
 
         # Angle arc
-        _draw_angle_arc(overlay, xi, yi, theta, side, arc_radius_px, col)
+        _draw_angle_arc(overlay, xi, yi, theta, side, arc_radius_px, col,
+                        below_baseline=captive_bubble)
 
         # R² quality badge
         if show_r2 and r2 is not None:
             badge_col = _COL_TEXT_GOOD if r2 > 0.90 else _COL_TEXT_BAD
             bx = xi + 6 if side == "right" else xi - 62
-            cv2.putText(overlay, f"R²={r2:.2f}", (bx, yi - arc_radius_px - 8),
+            y_badge = yi + arc_radius_px + 16 if captive_bubble else yi - arc_radius_px - 8
+            cv2.putText(overlay, f"R²={r2:.2f}", (bx, y_badge),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.38, badge_col, 1, cv2.LINE_AA)
 
     # ── Angle readout ─────────────────────────────────────────────────────────
-    _draw_angle_text(overlay, result, h)
+    _draw_angle_text(overlay, result, h, captive_bubble=captive_bubble)
 
     return overlay
 
@@ -145,18 +154,18 @@ def _draw_angle_arc(
     side: str,
     r: int,
     color: tuple,
+    below_baseline: bool = False,
 ) -> None:
     """
     Draw a circular arc showing the contact angle.
 
-    The arc sweeps from the baseline direction to the tangent direction
-    in the y-down image coordinate system:
-        Left  side: baseline points +x  (right), sweep CCW by θ
-        Right side: baseline points -x  (left),  sweep CW  by θ
+    Sessile drop (below_baseline=False):
+        Left:  arc sweeps CCW above the baseline (y < yi)
+        Right: arc sweeps CW  above the baseline (y < yi)
 
-    Parametrisation (equivalent for both sides):
-        Left:  x = xi + r·cos(t),  y = yi − r·sin(t)  for t in [0, θ]
-        Right: x = xi − r·cos(t),  y = yi − r·sin(t)  for t in [0, θ]
+    Captive bubble (below_baseline=True):
+        Left:  arc sweeps CW  below the baseline (y > yi)
+        Right: arc sweeps CCW below the baseline (y > yi)
     """
     th_rad = math.radians(theta)
     t_vals = np.linspace(0.0, th_rad, 40)
@@ -166,13 +175,17 @@ def _draw_angle_arc(
     else:
         xs = (xi - r * np.cos(t_vals)).astype(int)
 
-    ys = (yi - r * np.sin(t_vals)).astype(int)
+    if below_baseline:
+        ys = (yi + r * np.sin(t_vals)).astype(int)
+    else:
+        ys = (yi - r * np.sin(t_vals)).astype(int)
 
     h, w = img.shape[:2]
     pts = np.column_stack([xs, ys])
-    # Keep only points inside the image and strictly above the baseline (yi)
-    # to prevent the arc from sweeping below the substrate for obtuse angles.
-    valid = (pts[:, 0] >= 0) & (pts[:, 0] < w) & (pts[:, 1] >= 0) & (pts[:, 1] <= yi)
+    if below_baseline:
+        valid = (pts[:, 0] >= 0) & (pts[:, 0] < w) & (pts[:, 1] < h) & (pts[:, 1] >= yi)
+    else:
+        valid = (pts[:, 0] >= 0) & (pts[:, 0] < w) & (pts[:, 1] >= 0) & (pts[:, 1] <= yi)
     pts = pts[valid]
 
     for i in range(len(pts) - 1):
@@ -186,8 +199,9 @@ def _draw_angle_text(
     img: np.ndarray,
     result: Dict[str, Any],
     img_height: int,
+    captive_bubble: bool = False,
 ) -> None:
-    """Draw the angle readout in the top-left corner."""
+    """Draw the angle readout.  Sessile: top-left.  Captive bubble: bottom-left."""
     lines = []
 
     th_l = result.get("theta_left")
@@ -204,9 +218,12 @@ def _draw_angle_text(
     if asym is not None:
         lines.append((f"|L-R|: {asym:.1f}", _COL_TEXT))
 
-    y = 22
+    if captive_bubble:
+        y = img_height - 22 * len(lines) - 6
+    else:
+        y = 22
+
     for text, col in lines:
-        # Drop shadow
         cv2.putText(img, text + "°", (9, y + 1),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.58, (0, 0, 0), 2, cv2.LINE_AA)
         cv2.putText(img, text + "°", (8, y),
