@@ -82,10 +82,13 @@ def _get_sea():
 
 # ── Shared parameter panel ────────────────────────────────────────────────────
 
-class ParamPanel(tk.LabelFrame):
+class ParamPanel(ttk.LabelFrame):
     """
     Reusable panel of analysis parameters shown in each analysis dialog.
     Mirrors the parameters of ContactAngleAnalyzer.
+
+    Uses ttk.LabelFrame (not tk.LabelFrame) because only ttk supports the
+    'padding' option; tk.LabelFrame silently raises TclError for it.
     """
 
     def __init__(self, parent, **kw):
@@ -137,15 +140,36 @@ class ParamPanel(tk.LabelFrame):
         return out
 
 
+# ── Base Toplevel with visible error reporting ────────────────────────────────
+
+class _SafeWindow(tk.Toplevel):
+    """
+    Toplevel base class that catches exceptions from _build() and displays
+    them as visible red text rather than producing a silent grey screen.
+    """
+    def _safe_build(self) -> None:
+        try:
+            self._build()
+        except Exception:
+            import traceback
+            msg = traceback.format_exc()
+            tk.Label(
+                self,
+                text="Window failed to build — see error below:\n\n" + msg,
+                fg="red", justify="left", wraplength=560,
+                font=("Courier", 8),
+            ).pack(padx=10, pady=10)
+
+
 # ── Single image window ───────────────────────────────────────────────────────
 
-class SingleImageWindow(tk.Toplevel):
+class SingleImageWindow(_SafeWindow):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("Single Image Analysis")
         self.resizable(True, True)
         self._path: Optional[Path] = None
-        self._build()
+        self._safe_build()
         self.minsize(400, 300)
         self.lift()
         self.focus_force()
@@ -233,12 +257,12 @@ class SingleImageWindow(tk.Toplevel):
 
 # ── Batch analysis window ─────────────────────────────────────────────────────
 
-class BatchWindow(tk.Toplevel):
+class BatchWindow(_SafeWindow):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("Batch Image Analysis")
         self._folder: Optional[Path] = None
-        self._build()
+        self._safe_build()
         self.minsize(400, 300)
         self.lift()
         self.focus_force()
@@ -333,12 +357,12 @@ class BatchWindow(tk.Toplevel):
 
 # ── Evaporation window ────────────────────────────────────────────────────────
 
-class EvaporationWindow(tk.Toplevel):
+class EvaporationWindow(_SafeWindow):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("Evaporation Video Analysis")
         self._video: Optional[Path] = None
-        self._build()
+        self._safe_build()
         self.minsize(400, 300)
         self.lift()
         self.focus_force()
@@ -432,12 +456,12 @@ class EvaporationWindow(tk.Toplevel):
 
 # ── Advancing/receding window ─────────────────────────────────────────────────
 
-class AdvRecWindow(tk.Toplevel):
+class AdvRecWindow(_SafeWindow):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("Advancing/Receding Contact Angle")
         self._video: Optional[Path] = None
-        self._build()
+        self._safe_build()
         self.minsize(400, 300)
         self.lift()
         self.focus_force()
@@ -518,11 +542,11 @@ class AdvRecWindow(tk.Toplevel):
 
 # ── Live camera launcher ──────────────────────────────────────────────────────
 
-class LiveWindow(tk.Toplevel):
+class LiveWindow(_SafeWindow):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("Live Camera Analysis")
-        self._build()
+        self._safe_build()
         self.minsize(400, 280)
         self.lift()
         self.focus_force()
@@ -580,12 +604,12 @@ class LiveWindow(tk.Toplevel):
 
 # ── Tuner launcher ────────────────────────────────────────────────────────────
 
-class TunerWindow(tk.Toplevel):
+class TunerWindow(_SafeWindow):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("Parameter Tuner")
         self._path: Optional[Path] = None
-        self._build()
+        self._safe_build()
         self.minsize(350, 200)
         self.lift()
         self.focus_force()
@@ -636,12 +660,12 @@ class TunerWindow(tk.Toplevel):
 
 # ── Surface energy window ─────────────────────────────────────────────────────
 
-class SurfaceEnergyWindow(tk.Toplevel):
+class SurfaceEnergyWindow(_SafeWindow):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("Surface Energy Calculator")
         self._rows: list = []
-        self._build()
+        self._safe_build()
         self.minsize(400, 350)
         self.lift()
         self.focus_force()
