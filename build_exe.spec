@@ -1,47 +1,38 @@
 # PyInstaller spec file — builds a single-file Windows .exe
 #
 # Run from INSIDE the water-contact-angle folder:
-#   pip install pyinstaller windnd
+#   pip install pyinstaller
 #   pyinstaller build_exe.spec
+#
+# To see error messages (debug build):
+#   change  console=False  to  console=True  below, then rebuild.
 
-import os, glob
+import os
 block_cipher = None
-
-# Collect all sibling .py analysis modules so they are bundled as plain files
-# that can be found via absolute import (import analyzer, import detection, …)
-_here = os.path.dirname(os.path.abspath('app.py'))
-_sibling_modules = [
-    'analyzer', 'calibration', 'detection', 'preprocessing', 'visualization',
-    'fitting', 'evaporation', 'advancing_receding', 'live', 'surface_energy',
-    'baseline', 'publication', 'tuner', 'segmentation', 'reflection',
-]
-_extra_datas = [(os.path.join(_here, f"{m}.py"), ".") for m in _sibling_modules
-                if os.path.exists(os.path.join(_here, f"{m}.py"))]
 
 a = Analysis(
     ['app.py'],
     pathex=['.'],
     binaries=[],
-    datas=_extra_datas,
+    datas=[],
     hiddenimports=[
-        # sibling analysis modules
-        'analyzer',
-        'calibration',
-        'detection',
-        'preprocessing',
-        'visualization',
-        'fitting',
-        'evaporation',
-        'advancing_receding',
-        'live',
-        'surface_energy',
-        'baseline',
-        'publication',
-        'tuner',
-        'segmentation',
-        'reflection',
+        # sibling analysis modules — listed so PyInstaller compiles them in
+        'wca.analyzer',
+        'wca.calibration',
+        'wca.detection',
+        'wca.preprocessing',
+        'wca.visualization',
+        'wca.fitting',
+        'wca.evaporation',
+        'wca.advancing_receding',
+        'wca.live',
+        'wca.surface_energy',
+        'wca.baseline',
+        'wca.publication',
+        'wca.tuner',
+        'wca.segmentation',
+        'wca.reflection',
         # third-party
-        'windnd',
         'cv2',
         'numpy',
         'scipy',
@@ -56,7 +47,7 @@ a = Analysis(
     ],
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=['runtime_hook_wca.py'],   # creates the 'wca' virtual package
     excludes=[],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -80,7 +71,7 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,        # change to True temporarily to see crash messages
+    console=False,     # ← change to True to see crash messages in a terminal
     disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,

@@ -53,32 +53,28 @@ def _set_dpi_aware() -> None:
 _set_dpi_aware()
 
 
-# ── Frozen-exe sys.path fix ───────────────────────────────────────────────────
-# PyInstaller extracts everything into sys._MEIPASS.  The sibling analysis
-# modules (analyzer.py, detection.py, …) are collected there as a sub-package
-# folder called 'wca_modules'.  We add that folder to sys.path so that
-# absolute imports work regardless of how the exe was invoked.
+# ── Frozen-exe: ensure MEIPASS is on sys.path ────────────────────────────────
 if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-    _mei = sys._MEIPASS
-    for _candidate in (_mei, str(Path(_mei) / "wca_modules")):
-        if _candidate not in sys.path:
-            sys.path.insert(0, _candidate)
+    if sys._MEIPASS not in sys.path:
+        sys.path.insert(0, sys._MEIPASS)
 
 
 # ── Portable sibling-module importer ─────────────────────────────────────────
 def _pkg_import(module: str, *names):
     """
-    Import names from a sibling module.
-
-    Works in three contexts:
-      1. Running as a package  (python -m water-contact-angle) → relative import
-      2. Frozen exe (PyInstaller)                              → absolute import
-      3. Plain script (python app.py)                         → absolute import
+    Import names from a sibling analysis module. Three contexts:
+      1. Package (python -m water-contact-angle)  → relative import via __package__
+      2. Frozen exe (PyInstaller)                 → import as 'wca.module'
+         runtime_hook_wca.py pre-creates the 'wca' virtual package so that
+         relative imports inside the sibling modules keep working.
+      3. Plain script (python app.py)             → absolute import
     """
     import importlib
     pkg = __package__
     if pkg:
         mod = importlib.import_module(f".{module}", package=pkg)
+    elif getattr(sys, "frozen", False):
+        mod = importlib.import_module(f"wca.{module}")
     else:
         mod = importlib.import_module(module)
     if len(names) == 1:
@@ -107,13 +103,49 @@ def _get_sea():
     return _pkg_import("surface_energy", "SurfaceEnergyAnalyzer", "LIQUIDS")
 
 
-# ── Drag-and-drop (windnd — uses Windows OLE, no Tcl/Tk extension needed) ─────
-try:
-    import windnd as _windnd
-    _DND_OK = True
-except Exception:
-    _windnd = None
-    _DND_OK = False
+# ── Drag-and-drop via Windows API (ctypes only, no third-party library) ───────
+def _setup_drop(widget, callback):
+    """
+    Register a tkinter widget as a Windows drag-and-drop target.
+    Calls callback([path_str, ...]) on the main thread when files are dropped.
+    Uses only ctypes — works in any frozen exe without extra packages.
+    """
+    try:
+        import ctypes
+        import ctypes.wintypes as wt
+
+        shell32 = ctypes.windll.shell32
+        user32  = ctypes.windll.user32
+
+        widget.update_idletasks()          # ensure HWND exists
+        hwnd = widget.winfo_id()
+        shell32.DragAcceptFiles(hwnd, True)
+
+        WM_DROPFILES = 0x0233
+        WNDPROCTYPE  = ctypes.WINFUNCTYPE(
+            ctypes.c_longlong, wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM
+        )
+
+        def _wndproc(hwnd, msg, wparam, lparam):
+            if msg == WM_DROPFILES:
+                n = shell32.DragQueryFileW(wparam, 0xFFFFFFFF, None, 0)
+                files = []
+                for i in range(n):
+                    sz  = shell32.DragQueryFileW(wparam, i, None, 0) + 1
+                    buf = ctypes.create_unicode_buffer(sz)
+                    shell32.DragQueryFileW(wparam, i, buf, sz)
+                    files.append(buf.value)
+                shell32.DragFinish(wparam)
+                widget.after(0, lambda f=files: callback(f))
+                return 0
+            return user32.CallWindowProcW(_old[0], hwnd, msg, wparam, lparam)
+
+        proc  = WNDPROCTYPE(_wndproc)
+        _old  = [user32.SetWindowLongPtrW(hwnd, -4, proc)]
+        widget._dnd_proc = proc   # prevent garbage collection
+        widget._dnd_old  = _old
+    except Exception:
+        pass
 
 
 # ── Shared parameter panel ────────────────────────────────────────────────────
@@ -217,13 +249,11 @@ class SingleImageWindow(_SafeWindow):
         frm = tk.Frame(self)
         frm.pack(fill="x", padx=10, pady=5)
         tk.Button(frm, text="Browse image…", command=self._browse).pack(side="left")
-        hint = "  ← or drag & drop an image here" if _DND_OK else ""
-        self._path_lbl = tk.Label(frm, text=f"No file selected{hint}", fg="grey")
+        self._path_lbl = tk.Label(frm, text="No file selected  (or drag & drop)", fg="grey")
         self._path_lbl.pack(side="left", padx=8)
 
-        # Drag-and-drop via windnd (Windows OLE — works in frozen exes)
-        if _DND_OK:
-            _windnd.hook_dropfiles(self, func=self._on_drop)
+        # Drag-and-drop registered after build completes
+        self.after(200, lambda: _setup_drop(self, self._on_drop))
 
         btn_frm = tk.Frame(self)
         btn_frm.pack(pady=8)
@@ -238,12 +268,10 @@ class SingleImageWindow(_SafeWindow):
         self._ca = None
 
     def _on_drop(self, files) -> None:
-        """Handle a file dragged onto the window (windnd callback)."""
+        """Handle files dropped onto the window."""
         if not files:
             return
-        f = files[0]
-        path = f.decode("utf-8") if isinstance(f, bytes) else str(f)
-        self._path = Path(path)
+        self._path = Path(files[0])
         self._path_lbl.config(text=str(self._path), fg="black")
 
     def _browse(self):

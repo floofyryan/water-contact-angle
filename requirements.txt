@@ -12,5 +12,4 @@ scipy>=1.10          # optional — not currently used directly, but good to hav
 # Pillow is required by some matplotlib backends on Windows
 Pillow>=9.0
 
-# Drag-and-drop support (Windows OLE, works in frozen exes)
-windnd>=1.1.1
+# Drag-and-drop is implemented via ctypes (built-in) — no extra package needed
