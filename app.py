@@ -114,34 +114,54 @@ def _setup_drop(widget, callback):
         import ctypes
         import ctypes.wintypes as wt
 
+        LONG_PTR = ctypes.c_ssize_t   # 64-bit signed pointer on 64-bit Windows
+
         shell32 = ctypes.windll.shell32
         user32  = ctypes.windll.user32
 
+        # Must set restype/argtypes before any call — ctypes defaults to c_int
+        # (32-bit) which silently truncates 64-bit pointers and causes crashes.
+        user32.SetWindowLongPtrW.restype  = LONG_PTR
+        user32.SetWindowLongPtrW.argtypes = [wt.HWND, ctypes.c_int, LONG_PTR]
+        user32.CallWindowProcW.restype    = LONG_PTR
+        user32.CallWindowProcW.argtypes   = [LONG_PTR, wt.HWND, wt.UINT,
+                                              wt.WPARAM, wt.LPARAM]
+        user32.DefWindowProcW.restype     = LONG_PTR
+
         widget.update_idletasks()          # ensure HWND exists
         hwnd = widget.winfo_id()
+        if not hwnd:
+            return
         shell32.DragAcceptFiles(hwnd, True)
 
         WM_DROPFILES = 0x0233
         WNDPROCTYPE  = ctypes.WINFUNCTYPE(
-            ctypes.c_longlong, wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM
+            LONG_PTR, wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM
         )
 
-        def _wndproc(hwnd, msg, wparam, lparam):
-            if msg == WM_DROPFILES:
-                n = shell32.DragQueryFileW(wparam, 0xFFFFFFFF, None, 0)
-                files = []
-                for i in range(n):
-                    sz  = shell32.DragQueryFileW(wparam, i, None, 0) + 1
-                    buf = ctypes.create_unicode_buffer(sz)
-                    shell32.DragQueryFileW(wparam, i, buf, sz)
-                    files.append(buf.value)
-                shell32.DragFinish(wparam)
-                widget.after(0, lambda f=files: callback(f))
-                return 0
-            return user32.CallWindowProcW(_old[0], hwnd, msg, wparam, lparam)
+        _old = [LONG_PTR(0)]
 
-        proc  = WNDPROCTYPE(_wndproc)
-        _old  = [user32.SetWindowLongPtrW(hwnd, -4, proc)]
+        def _wndproc(h, msg, wp, lp):
+            try:
+                if msg == WM_DROPFILES:
+                    n = shell32.DragQueryFileW(wp, 0xFFFFFFFF, None, 0)
+                    files = []
+                    for i in range(n):
+                        sz  = shell32.DragQueryFileW(wp, i, None, 0) + 1
+                        buf = ctypes.create_unicode_buffer(sz)
+                        shell32.DragQueryFileW(wp, i, buf, sz)
+                        files.append(buf.value)
+                    shell32.DragFinish(wp)
+                    widget.after(0, lambda f=files: callback(f))
+                    return 0
+                if _old[0]:
+                    return user32.CallWindowProcW(_old[0], h, msg, wp, lp)
+                return user32.DefWindowProcW(h, msg, wp, lp)
+            except Exception:
+                return user32.DefWindowProcW(h, msg, wp, lp)
+
+        proc     = WNDPROCTYPE(_wndproc)
+        _old[0]  = user32.SetWindowLongPtrW(hwnd, -4, proc)
         widget._dnd_proc = proc   # prevent garbage collection
         widget._dnd_old  = _old
     except Exception:
