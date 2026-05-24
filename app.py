@@ -25,6 +25,7 @@ Build to .exe (from this directory):
 from __future__ import annotations
 
 import csv
+import ctypes
 import os
 import sys
 import threading
@@ -35,6 +36,21 @@ from typing import Optional
 
 import cv2
 import numpy as np
+
+
+# ── Windows DPI awareness — must run before any tkinter window is created ──────
+# Without this, on 125 %/150 % scaled displays tkinter Toplevel windows appear
+# as tiny grey boxes because Tk renders at 96 DPI regardless of screen scale.
+def _set_dpi_aware() -> None:
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)  # PROCESS_SYSTEM_DPI_AWARE
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()   # fallback (Win Vista+)
+        except Exception:
+            pass
+
+_set_dpi_aware()
 
 
 # ── Lazy imports of heavy modules (keeps startup fast) ────────────────────────
@@ -130,6 +146,9 @@ class SingleImageWindow(tk.Toplevel):
         self.resizable(True, True)
         self._path: Optional[Path] = None
         self._build()
+        self.minsize(400, 300)
+        self.lift()
+        self.focus_force()
 
     def _build(self):
         self._params = ParamPanel(self, padding=6)
@@ -220,6 +239,9 @@ class BatchWindow(tk.Toplevel):
         self.title("Batch Image Analysis")
         self._folder: Optional[Path] = None
         self._build()
+        self.minsize(400, 300)
+        self.lift()
+        self.focus_force()
 
     def _build(self):
         self._params = ParamPanel(self, padding=6)
@@ -317,6 +339,9 @@ class EvaporationWindow(tk.Toplevel):
         self.title("Evaporation Video Analysis")
         self._video: Optional[Path] = None
         self._build()
+        self.minsize(400, 300)
+        self.lift()
+        self.focus_force()
 
     def _build(self):
         self._params = ParamPanel(self, padding=6)
@@ -413,6 +438,9 @@ class AdvRecWindow(tk.Toplevel):
         self.title("Advancing/Receding Contact Angle")
         self._video: Optional[Path] = None
         self._build()
+        self.minsize(400, 300)
+        self.lift()
+        self.focus_force()
 
     def _build(self):
         self._params = ParamPanel(self, padding=6)
@@ -495,6 +523,9 @@ class LiveWindow(tk.Toplevel):
         super().__init__(parent)
         self.title("Live Camera Analysis")
         self._build()
+        self.minsize(400, 280)
+        self.lift()
+        self.focus_force()
 
     def _build(self):
         self._params = ParamPanel(self, padding=6)
@@ -555,6 +586,9 @@ class TunerWindow(tk.Toplevel):
         self.title("Parameter Tuner")
         self._path: Optional[Path] = None
         self._build()
+        self.minsize(350, 200)
+        self.lift()
+        self.focus_force()
 
     def _build(self):
         frm = tk.Frame(self)
@@ -608,9 +642,17 @@ class SurfaceEnergyWindow(tk.Toplevel):
         self.title("Surface Energy Calculator")
         self._rows: list = []
         self._build()
+        self.minsize(400, 350)
+        self.lift()
+        self.focus_force()
 
     def _build(self):
-        SEA, LIQUIDS = _get_sea()
+        try:
+            SEA, LIQUIDS = _get_sea()
+        except Exception as exc:
+            tk.Label(self, text=f"Could not load surface energy module:\n{exc}",
+                     fg="red", justify="left", wraplength=380).pack(padx=12, pady=12)
+            return
         self._LIQUIDS = LIQUIDS
         self._SEA_cls = SEA
 
