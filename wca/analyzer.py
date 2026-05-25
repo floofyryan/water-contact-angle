@@ -31,6 +31,7 @@ Usage
 
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -74,6 +75,7 @@ class ContactAngleAnalyzer:
         baseline_margin: int = 5,
         baseline_search_fraction: float = 0.20,
         use_circle_fit: bool = False,
+        tilt_correction: bool = False,
     ):
         if mode not in ("sessile", "captive_bubble"):
             raise ValueError("mode must be 'sessile' or 'captive_bubble'")
@@ -86,6 +88,7 @@ class ContactAngleAnalyzer:
         self.baseline_margin          = int(baseline_margin)
         self.baseline_search_fraction = float(baseline_search_fraction)
         self.use_circle_fit           = use_circle_fit
+        self.tilt_correction          = tilt_correction
 
         # State set by analyze()
         self._raw:       Optional[np.ndarray]       = None  # original BGR input
@@ -151,6 +154,30 @@ class ContactAngleAnalyzer:
         else:
             self._baseline_y = int(baseline_y_oriented)
 
+        # ── Tilt correction ───────────────────────────────────────────────────
+        # If requested and the user hasn't pinned a manual baseline, detect the
+        # substrate tilt polynomial and physically rotate the image so the
+        # baseline becomes horizontal.  This is done BEFORE edge detection so
+        # every downstream step works in the corrected coordinate system.
+        if self.tilt_correction and baseline_y_oriented is None:
+            try:
+                from . import baseline as _bl_mod
+                _poly = _bl_mod.detect_baseline_poly(
+                    self._gray,
+                    search_fraction=self.baseline_search_fraction,
+                )
+                if _poly.max_deviation_px() > 2.0:
+                    self._oriented, self._baseline_y = _bl_mod.straighten_image(
+                        self._oriented, _poly
+                    )
+                    self._gray = prep.preprocess(
+                        self._oriented,
+                        clahe_clip=self.clahe_clip,
+                        blur_ksize=self.blur_ksize,
+                    )
+            except Exception:
+                pass   # silently fall back to flat baseline
+
         # ── Edges ─────────────────────────────────────────────────────────────
         self._edges = det.detect_edges(
             self._gray,
@@ -192,17 +219,28 @@ class ContactAngleAnalyzer:
         # ── Optional circle fit ───────────────────────────────────────────────
         if self.use_circle_fit:
             try:
-                cb = (self.mode == "captive_bubble")
+                cb   = (self.mode == "captive_bubble")
                 circ = fit.fit_circle_contact_angle(xs, ys,
                                                     float(self._baseline_y),
                                                     captive_bubble=cb)
-                result["theta_circle"]    = circ.get("theta_mean")
-                result["circle_rms_px"]   = circ.get("rms_px")
-                result["circle_r2"]       = circ.get("r2_left")
+                if cb:
+                    # Apply the same 180° liquid-phase correction as PCA
+                    for k in ("theta_left", "theta_right", "theta_mean"):
+                        if circ.get(k) is not None:
+                            circ[k] = 180.0 - circ[k]
+                result["theta_circle"]   = circ.get("theta_mean")
+                result["circle_rms_px"]  = circ.get("rms_px")
+                result["circle_r2"]      = circ.get("r2_left")
+                result["circle_cx"]      = circ.get("cx")
+                result["circle_cy"]      = circ.get("cy")
+                result["circle_radius"]  = circ.get("radius")
+                result["circle_x_left"]  = circ.get("x_left")
+                result["circle_x_right"] = circ.get("x_right")
             except Exception:
-                result["theta_circle"]    = None
-                result["circle_rms_px"]   = None
-                result["circle_r2"]       = None
+                for k in ("theta_circle", "circle_rms_px", "circle_r2",
+                          "circle_cx", "circle_cy", "circle_radius",
+                          "circle_x_left", "circle_x_right"):
+                    result[k] = None
 
         self._result = result
         return result
@@ -217,15 +255,19 @@ class ContactAngleAnalyzer:
             raise RuntimeError("Call analyze() before get_overlay().")
 
         if self.mode == "captive_bubble":
-            # Show the image in its ORIGINAL (un-flipped) orientation so the
-            # substrate appears at the top as the user expects.  The edges are
-            # flipped back, and baseline_y is remapped to original coordinates.
             h = self._raw.shape[0]
             bl_orig = h - 1 - (self._baseline_y or 0)
+
+            # Remap circle centre from flipped coords to original coords
+            cb_result = copy.copy(self._result)
+            if cb_result.get("circle_cy") is not None:
+                cb_result["circle_cy"] = h - 1 - cb_result["circle_cy"]
+            # x_left / x_right don't change (x doesn't flip with vertical flip)
+
             return viz.draw_overlay(
                 self._raw,
                 np.flipud(self._edges),
-                self._result,
+                cb_result,
                 bl_orig,
                 captive_bubble=True,
                 **kwargs,

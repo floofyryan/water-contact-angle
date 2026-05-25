@@ -212,6 +212,19 @@ class ParamPanel(ttk.LabelFrame):
             w.grid(row=row, column=1, sticky="w", padx=4, pady=2)
             self._vars[key] = (var, typ)
 
+        # Boolean toggles
+        self._bool_vars: dict = {}
+        toggle_row = len(defs)
+        for label, key, default in [
+            ("Circle fit",  "use_circle_fit",  False),
+            ("Fix tilt",    "tilt_correction", False),
+        ]:
+            var = tk.BooleanVar(value=default)
+            cb  = tk.Checkbutton(self, text=label, variable=var, anchor="w")
+            cb.grid(row=toggle_row, column=0, columnspan=2, sticky="w", padx=4, pady=1)
+            self._bool_vars[key] = var
+            toggle_row += 1
+
     def get(self) -> dict:
         """Return current parameters as a dict suitable for ContactAngleAnalyzer."""
         out = {}
@@ -229,6 +242,8 @@ class ParamPanel(ttk.LabelFrame):
                 out[key] = int(raw) if raw else None
             else:
                 out[key] = raw
+        for key, var in self._bool_vars.items():
+            out[key] = var.get()
         return out
 
 
@@ -425,6 +440,8 @@ class SingleImageWindow(_SafeWindow):
                 blur_ksize=p["blur_ksize"],
                 window_px=p["window_px"],
                 baseline_margin=p["baseline_margin"],
+                use_circle_fit=p.get("use_circle_fit", False),
+                tilt_correction=p.get("tilt_correction", False),
             )
             r = self._ca.analyze(self._path, baseline_y=p["baseline_y"])
 
@@ -436,6 +453,8 @@ class SingleImageWindow(_SafeWindow):
             if r.get("r2_left")     is not None: lines.append(f"R²_L:  {r['r2_left']:.4f}")
             if r.get("r2_right")    is not None: lines.append(f"R²_R:  {r['r2_right']:.4f}")
             lines.append(f"Baseline y: {r.get('baseline_y')}")
+            if r.get("theta_circle") is not None:
+                lines.append(f"Circle: {r['theta_circle']:.2f}°  (rms={r.get('circle_rms_px', 0):.1f}px)")
             self._result_lbl.config(text="\n".join(lines))
             self._show_overlay()
         except Exception as exc:
