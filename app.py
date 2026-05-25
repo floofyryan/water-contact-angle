@@ -382,7 +382,8 @@ class SingleImageWindow(_SafeWindow):
         self._result_lbl = tk.Label(self, text="", font=("Courier", 11),
                                     justify="left")
         self._result_lbl.pack(padx=10, pady=4)
-        self._ca = None
+        self._ca          = None
+        self._overlay_win = None
 
     def _pick_baseline(self):
         if self._path is None:
@@ -436,15 +437,47 @@ class SingleImageWindow(_SafeWindow):
             if r.get("r2_right")    is not None: lines.append(f"R²_R:  {r['r2_right']:.4f}")
             lines.append(f"Baseline y: {r.get('baseline_y')}")
             self._result_lbl.config(text="\n".join(lines))
-            # Bug 6 fix: cv2.waitKey(0) would block tkinter's main thread.
-            # Run the OpenCV display window in a daemon thread instead.
-            ca_ref = self._ca
-            threading.Thread(
-                target=lambda: ca_ref.show("Analysis result  (press any key to close)"),
-                daemon=True,
-            ).start()
+            self._show_overlay()
         except Exception as exc:
-            messagebox.showerror("Error", str(exc))
+            import traceback
+            messagebox.showerror("Error", traceback.format_exc())
+
+    def _show_overlay(self):
+        """Display the analysis overlay in a tkinter window (thread-safe, re-entrant)."""
+        from PIL import Image as _PILImage, ImageTk as _ImageTk
+
+        overlay_bgr = self._ca.get_overlay()
+        overlay_rgb = cv2.cvtColor(overlay_bgr, cv2.COLOR_BGR2RGB)
+        pil_img     = _PILImage.fromarray(overlay_rgb)
+
+        # Close any previously open overlay window cleanly
+        try:
+            if self._overlay_win.winfo_exists():
+                self._overlay_win.destroy()
+        except Exception:
+            pass
+
+        win = tk.Toplevel(self)
+        win.title("Analysis Result")
+        self._overlay_win = win
+
+        # Scale to fit inside 900 × 700 while preserving aspect ratio
+        oh, ow = overlay_bgr.shape[:2]
+        scale  = min(1.0, 900 / ow, 700 / oh)
+        if scale < 1.0:
+            pil_img = pil_img.resize(
+                (max(1, int(ow * scale)), max(1, int(oh * scale))),
+                _PILImage.LANCZOS,
+            )
+
+        photo = _ImageTk.PhotoImage(pil_img)
+        lbl   = tk.Label(win, image=photo, bg="black")
+        lbl.image = photo          # keep reference so GC doesn't collect it
+        lbl.pack()
+
+        win.resizable(False, False)
+        win.lift()
+        win.focus_force()
 
     def _save(self):
         if self._ca is None:
