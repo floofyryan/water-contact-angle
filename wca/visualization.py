@@ -24,11 +24,11 @@ import numpy as np
 
 
 # ── Colours (BGR) ─────────────────────────────────────────────────────────────
-_COL_BASELINE  = (200, 200, 200)   # grey
-_COL_EDGE      = (255, 200,   0)   # cyan-ish
-_COL_LEFT      = (  0,  80, 220)   # red  (BGR)
-_COL_RIGHT     = (220,  80,   0)   # blue (BGR)
-_COL_TANGENT   = (  0, 220, 220)   # yellow
+_COL_BASELINE  = (  0, 200,  60)   # green — matches standard WCA reference images
+_COL_EDGE      = (200, 200,   0)   # dim cyan hint on detected edge pixels
+_COL_LEFT      = (  0,  50, 220)   # red (BGR)
+_COL_RIGHT     = (  0,  50, 220)   # red — same as left for clean look
+_COL_TANGENT   = (  0,  50, 220)   # red tangent lines
 _COL_TEXT      = (255, 255, 255)   # white
 _COL_TEXT_GOOD = (  0, 230,  90)   # green
 _COL_TEXT_BAD  = (  0,  60, 220)   # red
@@ -137,13 +137,9 @@ def _draw_dashed_hline(
     dash_len: int = 12,
     gap_len: int = 8,
 ) -> None:
-    """Draw a dashed horizontal line across the full image width."""
+    """Draw a solid horizontal baseline (matches reference WCA image style)."""
     w = img.shape[1]
-    x = 0
-    while x < w:
-        x_end = min(x + dash_len, w)
-        cv2.line(img, (x, y), (x_end, y), color, 1, cv2.LINE_AA)
-        x += dash_len + gap_len
+    cv2.line(img, (0, y), (w, y), color, 2, cv2.LINE_AA)
 
 
 def _draw_angle_arc(

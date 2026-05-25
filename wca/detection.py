@@ -84,6 +84,7 @@ def detect_edges(
     canny_low: int = 30,
     canny_high: int = 100,
     baseline_margin: int = 5,
+    suppress_reflections: bool = True,
 ) -> np.ndarray:
     """
     Run Canny edge detection, restricted to the drop/bubble region above baseline.
@@ -91,12 +92,17 @@ def detect_edges(
     Pixels at or below (baseline_y − baseline_margin) are zeroed so that
     substrate texture and reflections below the line do not contaminate the fit.
 
+    suppress_reflections removes edges that border bright specular reflections
+    (the white circle visible inside some drops under direct lighting).  It
+    dilates any pixel brighter than 220/255 by 9 px and zeros those edges.
+
     Args:
-        gray             : Preprocessed grayscale image (oriented).
-        baseline_y       : Row index of the substrate baseline.
-        canny_low        : Canny lower hysteresis threshold.
-        canny_high       : Canny upper hysteresis threshold.
-        baseline_margin  : Extra rows to exclude below baseline_y.
+        gray                  : Preprocessed grayscale image (oriented).
+        baseline_y            : Row index of the substrate baseline.
+        canny_low             : Canny lower hysteresis threshold.
+        canny_high            : Canny upper hysteresis threshold.
+        baseline_margin       : Extra rows to exclude below baseline_y.
+        suppress_reflections  : Remove edges adjacent to bright reflection zones.
 
     Returns:
         Binary uint8 edge image (255 = edge, 0 = background).
@@ -107,6 +113,18 @@ def detect_edges(
     cutoff = max(0, baseline_y - baseline_margin)
     edges[cutoff:, :] = 0
 
+    if suppress_reflections:
+        # Bright specular reflections inside the drop create a spurious inner
+        # circle of edges.  Any edge pixel adjacent to a very bright zone
+        # (>220) is removed — the outer drop boundary is a dark-to-grey
+        # transition and is unaffected; only the inner bright-circle boundary
+        # edges are removed.
+        bright_zone = cv2.dilate(
+            (gray > 220).astype(np.uint8),
+            np.ones((9, 9), np.uint8),
+        )
+        edges[bright_zone > 0] = 0
+
     return edges
 
 
@@ -115,21 +133,25 @@ def detect_edges(
 def extract_contour_points(
     edges: np.ndarray,
     min_points: int = 10,
-    use_longest_contour: bool = False,
+    baseline_y: Optional[int] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Extract (x, y) coordinates from a binary edge image.
+    Extract (x, y) edge coordinates, selecting only the drop/bubble contour.
 
-    Two strategies:
-    - Default: collect ALL non-zero pixel positions (fast, returns every edge
-      pixel). Best for PCA-based tangent fitting.
-    - use_longest_contour=True: run findContours and return the longest chain.
-      Better for circle fitting on clean, well-segmented images.
+    Strategy:
+    1. Find all contours in the edge image.
+    2. Among contours whose lowest point reaches within 30 px of baseline_y,
+       keep the widest one (largest x-span) — this is the outer drop boundary.
+    3. If no contour reaches the baseline, fall back to the largest by length.
+    4. If findContours returns nothing, fall back to all non-zero pixels.
+
+    This two-stage selection reliably discards inner specular-reflection circles
+    (they float above the baseline and are narrower than the outer boundary).
 
     Args:
-        edges               : Binary edge image (uint8, values 0 or 255).
-        min_points          : Raise ValueError if fewer points are found.
-        use_longest_contour : If True, use findContours instead of nonzero.
+        edges      : Binary edge image (uint8, values 0 or 255).
+        min_points : Raise ValueError if fewer points are found.
+        baseline_y : Baseline row — used to prefer contours that reach it.
 
     Returns:
         (xs, ys) : float64 arrays of x and y coordinates.
@@ -137,17 +159,29 @@ def extract_contour_points(
     Raises:
         ValueError if fewer than min_points are found.
     """
-    if use_longest_contour:
-        contours, _ = cv2.findContours(
-            edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
-        )
-        if not contours:
-            raise ValueError("No contours found in edge image.")
-        cnt = max(contours, key=cv2.contourArea)
+    contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+
+    if contours:
+        if baseline_y is not None:
+            # Prefer the contour whose bottom row is closest to the baseline
+            # and whose horizontal span is widest (the outer drop profile).
+            def _score(cnt):
+                pts = cnt.reshape(-1, 2)
+                bottom = pts[:, 1].max()
+                span   = pts[:, 0].max() - pts[:, 0].min()
+                # Contours that reach within 30 px of baseline_y get full span;
+                # others are penalised by how far they are from the baseline.
+                reach_bonus = span if abs(bottom - baseline_y) < 30 else 0
+                return reach_bonus + len(cnt) * 0.01
+            cnt = max(contours, key=_score)
+        else:
+            cnt = max(contours, key=len)
+
         pts = cnt.reshape(-1, 2)
         xs  = pts[:, 0].astype(np.float64)
         ys  = pts[:, 1].astype(np.float64)
     else:
+        # Last-resort fallback: every non-zero pixel
         ys_px, xs_px = np.where(edges > 0)
         if len(xs_px) == 0:
             raise ValueError("No edge pixels found.")

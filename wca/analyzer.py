@@ -158,11 +158,14 @@ class ContactAngleAnalyzer:
             canny_low=self.canny_low,
             canny_high=self.canny_high,
             baseline_margin=self.baseline_margin,
+            suppress_reflections=True,
         )
 
         # ── Contour points ────────────────────────────────────────────────────
         try:
-            xs, ys = det.extract_contour_points(self._edges, min_points=10)
+            xs, ys = det.extract_contour_points(
+                self._edges, min_points=10, baseline_y=self._baseline_y
+            )
         except ValueError as exc:
             self._result = _empty_result(self._baseline_y, str(exc))
             return self._result

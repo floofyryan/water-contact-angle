@@ -33,6 +33,7 @@ a = Analysis(
         'wca.segmentation',
         'wca.reflection',
         # third-party
+        'typing_extensions',
         'cv2',
         'numpy',
         'scipy',
