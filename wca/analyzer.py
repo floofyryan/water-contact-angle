@@ -76,9 +76,13 @@ class ContactAngleAnalyzer:
         baseline_search_fraction: float = 0.20,
         use_circle_fit: bool = False,
         tilt_correction: bool = False,
+        method: str = "pca",
     ):
         if mode not in ("sessile", "captive_bubble"):
             raise ValueError("mode must be 'sessile' or 'captive_bubble'")
+        valid_methods = ("pca", "circle", "ellipse", "height_width", "polynomial")
+        if method not in valid_methods:
+            raise ValueError(f"method must be one of {valid_methods}")
         self.mode                     = mode
         self.canny_low                = int(canny_low)
         self.canny_high               = int(canny_high)
@@ -89,6 +93,7 @@ class ContactAngleAnalyzer:
         self.baseline_search_fraction = float(baseline_search_fraction)
         self.use_circle_fit           = use_circle_fit
         self.tilt_correction          = tilt_correction
+        self.method                   = method
 
         # State set by analyze()
         self._raw:       Optional[np.ndarray]       = None  # original BGR input
@@ -197,53 +202,94 @@ class ContactAngleAnalyzer:
             self._result = _empty_result(self._baseline_y, str(exc))
             return self._result
 
-        # ── PCA contact angle ─────────────────────────────────────────────────
-        result = fit.compute_contact_angles(
-            xs, ys,
-            baseline_y=float(self._baseline_y),
-            window_px=self.window_px,
-        )
+        cb = (self.mode == "captive_bubble")
+        bl = float(self._baseline_y)
 
-        # ── Captive bubble angle correction ───────────────────────────────────
-        # The PCA method measures the angle through the GAS phase in the
-        # flipped image (same geometry as sessile drop).  For captive bubble the
-        # convention is to report the angle through the LIQUID (water) phase,
-        # which equals 180° − θ_PCA.
-        if self.mode == "captive_bubble":
+        # ── PCA contact angle (reference method, always computed) ──────────────
+        result = fit.compute_contact_angles(
+            xs, ys, baseline_y=bl, window_px=self.window_px,
+        )
+        # Captive bubble: PCA measures through the GAS phase in the flipped
+        # image; convention reports through the LIQUID phase = 180° − θ.
+        if cb:
             for key in ("theta_left", "theta_right", "theta_mean"):
                 if result.get(key) is not None:
                     result[key] = 180.0 - result[key]
             if result.get("theta_left") is not None and result.get("theta_right") is not None:
                 result["asymmetry"] = abs(result["theta_left"] - result["theta_right"])
 
-        # ── Optional circle fit ───────────────────────────────────────────────
-        if self.use_circle_fit:
-            try:
-                cb   = (self.mode == "captive_bubble")
-                circ = fit.fit_circle_contact_angle(xs, ys,
-                                                    float(self._baseline_y),
-                                                    captive_bubble=cb)
-                if cb:
-                    # Apply the same 180° liquid-phase correction as PCA
-                    for k in ("theta_left", "theta_right", "theta_mean"):
-                        if circ.get(k) is not None:
-                            circ[k] = 180.0 - circ[k]
-                result["theta_circle"]   = circ.get("theta_mean")
-                result["circle_rms_px"]  = circ.get("rms_px")
-                result["circle_r2"]      = circ.get("r2_left")
-                result["circle_cx"]      = circ.get("cx")
-                result["circle_cy"]      = circ.get("cy")
-                result["circle_radius"]  = circ.get("radius")
-                result["circle_x_left"]  = circ.get("x_left")
-                result["circle_x_right"] = circ.get("x_right")
-            except Exception:
-                for k in ("theta_circle", "circle_rms_px", "circle_r2",
-                          "circle_cx", "circle_cy", "circle_radius",
-                          "circle_x_left", "circle_x_right"):
-                    result[k] = None
+        # ── Run every method for side-by-side comparison ──────────────────────
+        methods = self._run_all_methods(xs, ys, bl, cb)
 
+        # Comparison angles (means) for the readout / CSV
+        result["theta_pca"] = result.get("theta_mean")
+        for name in ("circle", "ellipse", "height_width", "polynomial"):
+            m = methods.get(name)
+            result[f"theta_{name}"] = m.get("theta_mean") if m else None
+
+        # ── Geometry for overlay drawing (only the selected method's shape) ────
+        draw_circle  = (self.method == "circle") or self.use_circle_fit
+        if draw_circle and methods.get("circle"):
+            c = methods["circle"]
+            result["circle_cx"]      = c.get("cx")
+            result["circle_cy"]      = c.get("cy")
+            result["circle_radius"]  = c.get("radius")
+            result["circle_x_left"]  = c.get("x_left")
+            result["circle_x_right"] = c.get("x_right")
+            result["circle_rms_px"]  = c.get("rms_px")
+        if self.method == "ellipse" and methods.get("ellipse"):
+            e = methods["ellipse"]
+            for k in ("ellipse_cx", "ellipse_cy", "ellipse_a",
+                      "ellipse_b", "ellipse_theta"):
+                result[k] = e.get(k)
+            result["ellipse_rms_px"] = e.get("rms_px")
+
+        # ── Promote the selected method to the primary result keys ────────────
+        # The overlay arc, tangent and main θ readout use these keys.
+        if self.method != "pca" and methods.get(self.method):
+            chosen = methods[self.method]
+            for k in ("theta_left", "theta_right", "theta_mean", "asymmetry",
+                      "x_left", "x_right", "direction_left", "direction_right"):
+                if chosen.get(k) is not None:
+                    result[k] = chosen[k]
+
+        result["method"] = self.method
         self._result = result
         return result
+
+    def _run_all_methods(self, xs, ys, baseline_y, cb) -> Dict[str, Dict[str, Any]]:
+        """
+        Run each available fitting method, returning {name: result_dict} for
+        those that succeed.  Each is wrapped so one method failing never
+        aborts the analysis.
+        """
+        out: Dict[str, Dict[str, Any]] = {}
+
+        def _try(name, fn):
+            try:
+                out[name] = fn()
+            except Exception:
+                pass
+
+        _try("circle", lambda: self._circle_with_cb(xs, ys, baseline_y, cb))
+        _try("ellipse", lambda: fit.fit_ellipse_contact_angle(
+            xs, ys, baseline_y, captive_bubble=cb))
+        _try("height_width", lambda: fit.height_width_angle(
+            xs, ys, baseline_y, captive_bubble=cb))
+        _try("polynomial", lambda: fit.polynomial_tangent_angle(
+            xs, ys, baseline_y, window_px=max(self.window_px, 30.0),
+            captive_bubble=cb))
+        return out
+
+    @staticmethod
+    def _circle_with_cb(xs, ys, baseline_y, cb) -> Dict[str, Any]:
+        """Circle fit with the captive-bubble 180° correction applied."""
+        circ = fit.fit_circle_contact_angle(xs, ys, baseline_y, captive_bubble=cb)
+        if cb:
+            for k in ("theta_left", "theta_right", "theta_mean"):
+                if circ.get(k) is not None:
+                    circ[k] = 180.0 - circ[k]
+        return circ
 
     def get_overlay(self, **kwargs) -> np.ndarray:
         """
@@ -258,11 +304,16 @@ class ContactAngleAnalyzer:
             h = self._raw.shape[0]
             bl_orig = h - 1 - (self._baseline_y or 0)
 
-            # Remap circle centre from flipped coords to original coords
+            # Remap fitted-shape centres from flipped coords to original coords.
+            # x is unaffected by a vertical flip; only y maps as y' = h-1-y.
+            # For the rotated ellipse the tilt angle also negates.
             cb_result = copy.copy(self._result)
             if cb_result.get("circle_cy") is not None:
                 cb_result["circle_cy"] = h - 1 - cb_result["circle_cy"]
-            # x_left / x_right don't change (x doesn't flip with vertical flip)
+            if cb_result.get("ellipse_cy") is not None:
+                cb_result["ellipse_cy"] = h - 1 - cb_result["ellipse_cy"]
+            if cb_result.get("ellipse_theta") is not None:
+                cb_result["ellipse_theta"] = -cb_result["ellipse_theta"]
 
             return viz.draw_overlay(
                 self._raw,

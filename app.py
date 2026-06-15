@@ -191,6 +191,8 @@ class ParamPanel(ttk.LabelFrame):
     def _build(self):
         defs = [
             ("Mode",           "mode",       "sessile",  "combo", ["sessile", "captive_bubble"]),
+            ("Method",         "method",     "pca",      "combo",
+                ["pca", "ellipse", "circle", "height_width", "polynomial"]),
             ("Canny low",      "canny_low",  30,         "int",   None),
             ("Canny high",     "canny_high", 100,        "int",   None),
             ("CLAHE clip",     "clahe_clip", 2.0,        "float", None),
@@ -434,6 +436,7 @@ class SingleImageWindow(_SafeWindow):
             CA = _get_analyzer()
             self._ca = CA(
                 mode=p["mode"],
+                method=p.get("method", "pca"),
                 canny_low=p["canny_low"],
                 canny_high=p["canny_high"],
                 clahe_clip=p["clahe_clip"],
@@ -445,16 +448,26 @@ class SingleImageWindow(_SafeWindow):
             )
             r = self._ca.analyze(self._path, baseline_y=p["baseline_y"])
 
-            lines = []
+            lines = [f"Primary method: {r.get('method', 'pca')}"]
             if r.get("theta_left")  is not None: lines.append(f"Left:  {r['theta_left']:.2f}°")
             if r.get("theta_right") is not None: lines.append(f"Right: {r['theta_right']:.2f}°")
             if r.get("theta_mean")  is not None: lines.append(f"Mean:  {r['theta_mean']:.2f}°")
             if r.get("asymmetry")   is not None: lines.append(f"|L-R|: {r['asymmetry']:.2f}°")
-            if r.get("r2_left")     is not None: lines.append(f"R²_L:  {r['r2_left']:.4f}")
-            if r.get("r2_right")    is not None: lines.append(f"R²_R:  {r['r2_right']:.4f}")
             lines.append(f"Baseline y: {r.get('baseline_y')}")
-            if r.get("theta_circle") is not None:
-                lines.append(f"Circle: {r['theta_circle']:.2f}°  (rms={r.get('circle_rms_px', 0):.1f}px)")
+
+            # Method comparison table
+            comp = [
+                ("PCA",          r.get("theta_pca")),
+                ("Ellipse",      r.get("theta_ellipse")),
+                ("Circle",       r.get("theta_circle")),
+                ("Height/Width", r.get("theta_height_width")),
+                ("Polynomial",   r.get("theta_polynomial")),
+            ]
+            comp_lines = [f"  {name:<13}{val:.2f}°"
+                          for name, val in comp if val is not None]
+            if comp_lines:
+                lines.append("─ all methods ─")
+                lines.extend(comp_lines)
             self._result_lbl.config(text="\n".join(lines))
             self._show_overlay()
         except Exception as exc:
@@ -581,12 +594,15 @@ class BatchWindow(_SafeWindow):
             ContactAngleAnalyzer = _pkg_import("analyzer", "ContactAngleAnalyzer")
             ca = ContactAngleAnalyzer(
                 mode=p["mode"],
+                method=p.get("method", "pca"),
                 canny_low=p["canny_low"],
                 canny_high=p["canny_high"],
                 clahe_clip=p["clahe_clip"],
                 blur_ksize=p["blur_ksize"],
                 window_px=p["window_px"],
                 baseline_margin=p["baseline_margin"],
+                use_circle_fit=p.get("use_circle_fit", False),
+                tilt_correction=p.get("tilt_correction", False),
             )
             rows = []
             for i, img_path in enumerate(paths):
@@ -603,8 +619,11 @@ class BatchWindow(_SafeWindow):
                     self._status.config(text=f"{v}/{len(paths)}: {n}"),
                 ))
 
+            # CSV now includes every method's angle for side-by-side comparison
             fields = ["filename", "theta_left", "theta_right", "theta_mean",
-                      "asymmetry", "r2_left", "r2_right", "baseline_y", "error"]
+                      "asymmetry", "theta_pca", "theta_circle", "theta_ellipse",
+                      "theta_height_width", "theta_polynomial",
+                      "r2_left", "r2_right", "baseline_y", "error"]
             with open(out_path, "w", newline="") as fh:
                 writer = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
                 writer.writeheader()

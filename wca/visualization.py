@@ -34,6 +34,7 @@ _COL_TEXT      = (255, 255, 255)   # white
 _COL_TEXT_GOOD = (  0, 230,  90)   # green
 _COL_TEXT_BAD  = (  0,  60, 220)   # red
 _COL_CIRCLE    = (220, 200,   0)   # cyan-yellow for fitted circle arc
+_COL_ELLIPSE   = (255, 120, 200)   # pink-magenta for fitted ellipse arc
 
 
 def draw_overlay(
@@ -126,8 +127,9 @@ def draw_overlay(
             cv2.putText(overlay, f"R²={r2:.2f}", (bx, y_badge),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.38, badge_col, 1, cv2.LINE_AA)
 
-    # ── Fitted circle overlay ─────────────────────────────────────────────────
+    # ── Fitted shape overlays ─────────────────────────────────────────────────
     _draw_circle_arc(overlay, result, baseline_y, captive_bubble)
+    _draw_ellipse_arc(overlay, result, baseline_y, captive_bubble)
 
     # ── Angle readout ─────────────────────────────────────────────────────────
     _draw_angle_text(overlay, result, h, captive_bubble=captive_bubble)
@@ -265,6 +267,67 @@ def _draw_circle_arc(
                     cv2.FONT_HERSHEY_SIMPLEX, 0.35, _COL_CIRCLE, 1, cv2.LINE_AA)
 
 
+def _draw_ellipse_arc(
+    img: np.ndarray,
+    result: Dict[str, Any],
+    baseline_y: int,
+    captive_bubble: bool,
+) -> None:
+    """
+    Draw the fitted ellipse arc on the drop/bubble side of the baseline.
+
+    Uses the parametric ellipse (centre, semi-axes a/b, rotation θ) stored by
+    the analyzer.  Only the portion above (sessile) or below (captive bubble)
+    the baseline is drawn.
+    """
+    cx = result.get("ellipse_cx")
+    cy = result.get("ellipse_cy")
+    a  = result.get("ellipse_a")
+    b  = result.get("ellipse_b")
+    et = result.get("ellipse_theta")
+    if cx is None or cy is None or a is None or b is None or et is None:
+        return
+    if a <= 0 or b <= 0:
+        return
+
+    yi   = int(round(float(baseline_y)))
+    h, w = img.shape[:2]
+
+    t_vals = np.linspace(0, 2 * math.pi, 500)
+    cos_t, sin_t = np.cos(t_vals), np.sin(t_vals)
+    cos_e, sin_e = math.cos(et), math.sin(et)
+    px = (cx + a * cos_t * cos_e - b * sin_t * sin_e).astype(int)
+    py = (cy + a * cos_t * sin_e + b * sin_t * cos_e).astype(int)
+
+    if captive_bubble:
+        on_drop_side = py >= yi
+    else:
+        on_drop_side = py <= yi
+    in_bounds = (px >= 0) & (px < w) & (py >= 0) & (py < h)
+    valid     = on_drop_side & in_bounds
+
+    pts = np.column_stack([px, py])
+    prev_valid = False
+    for i in range(len(pts)):
+        if not valid[i]:
+            prev_valid = False
+            continue
+        if prev_valid:
+            dist = abs(int(pts[i, 0]) - int(pts[i - 1, 0])) + abs(int(pts[i, 1]) - int(pts[i - 1, 1]))
+            if dist < 20:
+                cv2.line(img,
+                         (int(pts[i - 1, 0]), int(pts[i - 1, 1])),
+                         (int(pts[i,     0]), int(pts[i,     1])),
+                         _COL_ELLIPSE, 2, cv2.LINE_AA)
+        prev_valid = True
+
+    # Contact-point markers where the ellipse meets the baseline
+    for xc in (result.get("x_left"), result.get("x_right")):
+        if xc is not None:
+            cv2.circle(img, (int(round(float(xc))), yi), 7,
+                       _COL_ELLIPSE, 2, cv2.LINE_AA)
+
+
 def _draw_angle_text(
     img: np.ndarray,
     result: Dict[str, Any],
@@ -288,9 +351,19 @@ def _draw_angle_text(
     if asym is not None:
         lines.append((f"|L-R|: {asym:.1f}", _COL_TEXT))
 
-    theta_circ = result.get("theta_circle")
-    if theta_circ is not None:
-        lines.append((f"⊙ circ: {theta_circ:.1f}", _COL_CIRCLE))
+    # Method comparison table — show whichever methods produced an angle.
+    method_rows = [
+        ("PCA",     result.get("theta_pca"),          _COL_TEXT),
+        ("circle",  result.get("theta_circle"),       _COL_CIRCLE),
+        ("ellipse", result.get("theta_ellipse"),      _COL_ELLIPSE),
+        ("H/W",     result.get("theta_height_width"), _COL_TEXT),
+        ("poly",    result.get("theta_polynomial"),   _COL_TEXT),
+    ]
+    comparison = [(f"  {name}: {val:.1f}", col)
+                  for name, val, col in method_rows if val is not None]
+    if comparison:
+        lines.append(("methods:", _COL_TEXT))
+        lines.extend(comparison)
 
     if captive_bubble:
         y = img_height - 22 * len(lines) - 6

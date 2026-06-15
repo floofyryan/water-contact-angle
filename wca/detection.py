@@ -115,15 +115,22 @@ def detect_edges(
 
     if suppress_reflections:
         # Bright specular reflections inside the drop create a spurious inner
-        # circle of edges.  Any edge pixel adjacent to a very bright zone
-        # (>220) is removed — the outer drop boundary is a dark-to-grey
-        # transition and is unaffected; only the inner bright-circle boundary
-        # edges are removed.
-        bright_zone = cv2.dilate(
-            (gray > 220).astype(np.uint8),
-            np.ones((9, 9), np.uint8),
-        )
-        edges[bright_zone > 0] = 0
+        # ring of edges.  We remove edges bordering bright zones — but ONLY
+        # small bright blobs (the specular highlight), NOT a large bright
+        # background (back-lit images), which would otherwise erase the drop
+        # outline itself.
+        bright = (gray > 220).astype(np.uint8)
+        n_lbl, labels, stats, _ = cv2.connectedComponentsWithStats(bright, 8)
+        img_area = gray.shape[0] * gray.shape[1]
+        small_bright = np.zeros_like(bright)
+        for lbl in range(1, n_lbl):
+            area = stats[lbl, cv2.CC_STAT_AREA]
+            # Specular highlights are small; a back-lit background is large.
+            if area < 0.08 * img_area:
+                small_bright[labels == lbl] = 1
+        if small_bright.any():
+            bright_zone = cv2.dilate(small_bright, np.ones((9, 9), np.uint8))
+            edges[bright_zone > 0] = 0
 
     return edges
 
