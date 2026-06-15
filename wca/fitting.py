@@ -576,8 +576,31 @@ def fit_ellipse_contact_angle(
     """
     import math as _math
 
+    # Guard: arc must have enough vertical depth to uniquely constrain an ellipse.
+    # A very shallow arc (y-extent < 25% of x-extent) can be fitted by many different
+    # conics; the Halir-Flusser solver picks one at random with wild contact angles.
+    y_span = float(ys.max() - ys.min())
+    x_span = float(xs.max() - xs.min())
+    if x_span > 1e-3 and (y_span / x_span) < 0.25:
+        raise ValueError(
+            f"Arc too shallow for reliable ellipse fit "
+            f"(y-span/x-span = {y_span/x_span:.2f} < 0.25); use circle or H/W instead."
+        )
+
     A, B, C, D, E, F = fit_ellipse_lstsq(xs, ys)
     yb = float(baseline_y)
+
+    # Reject degenerate conics (very elongated ellipse or near-parabolic).
+    try:
+        _cx, _cy, _a, _b, _et = _ellipse_geometry(A, B, C, D, E, F)
+        if _b < 1e-6 or (_a / _b) > 5.0:
+            raise ValueError(
+                f"Ellipse degenerate (axis ratio {_a/_b:.1f} > 5)."
+            )
+    except ValueError:
+        raise
+    except Exception:
+        pass
 
     # Intersect the conic with the baseline y = yb:
     #   A·x² + (B·yb + D)·x + (C·yb² + E·yb + F) = 0
